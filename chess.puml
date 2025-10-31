@@ -1,0 +1,520 @@
+@startuml
+
+title Chess Game Diagram
+
+package domain {
+
+    class Game {
+        ' game logic
+        -listeners : List<MoveListener>
+        -board : Board
+        -players : Player[2]
+        -currentTurn: Color
+        -state: GameState
+        -moveNumber : int
+        -rules : RulesEngine
+        -stats : GameStatisticsTracker
+
+        -prevBoardStates: List<BoardSnapshot>
+        -repeatedStateCounter : int
+        
+
+
+        +start(players: Player[2]) : void
+        +makeMove(player : Player, move: Move): void
+        +getState(): GameState
+        +getTurn(): Color
+        +gameView(): GameView
+
+        +addListener(l: MoveListener) : void
+        +removeListener(l : MoveListener): void
+        -notifyMove(move : Move, mover : Player, snap: GameSnapshot): void
+        -checkThreefoldRepetition(): boolean
+
+        ~declareWinner(): void
+        ~declareStalemate(): void
+        ~declareDraw(): void
+
+        +Game(rules: RulesEngine, stats: GameStatisticsTracker)
+    }
+
+note right of Game::checkThreefoldRepetition
+    If a single board state is repeated 3 times throughout a game, a draw is called.
+    This is why we have to hold on to previous board states and keep a counter of 
+    the max repeated state. Alternatively, this could be computed using MoveHistory.
+end note
+
+    class CastlingRights {
+        -rights : Map<Color, boolean>
+
+                +canCastle?(p : Player) : boolean
+
+        +CastlingRights()
+    }
+
+    class Board {
+        ' -grid : Position[8][8]
+        -pieces : Piece?[8][8]
+        -halfmoveClock : int
+        -enPassantFile: int
+        -castlingRights : CastlingRights
+
+
+
+        +pieceAt(pos: Position): Piece | None
+        ' let's assume validating moves happens somewhere else for now
+        ~apply(move: Move): void
+        +clone(): Board
+
+        +Board()
+    }
+
+    class BoardSnapshot {
+        -{final} pieces : Piece?[8][8]
+        -{final} halfmoveClock : int
+        -{final} enPassantFile: int
+        -{final} castlingRights : CastlingRights
+
+
+        +pieceAt(pos : Position): Piece | None
+        +clone() : BoardSnapshot
+
+        +BoardSnapshot(pieces: Piece?[8][8], halfmoveClock: int, enPassantFile: int, castlingRights: CastlingRights)
+    }
+
+    ' BoardSnapshot --* Board
+
+    class Position {
+        ' (rank, file) - (x, y)
+        -x : int
+        -y : int
+
+        +getX(): int
+        +getY() : int
+
+        +Position(x: int, y: int)
+    }
+
+    ' maybe skippable? might just end up fully wrapping square
+    ' class Square {
+
+    ' }
+
+    enum MoveKind {
+        NORMAL 
+        CAPTURE 
+        CASTLE 
+        EN_PASSANT
+        PROMOTION
+        PAWN_DOUBLE
+    }
+
+    class Move {
+        ' immutable description of an attempted / validated move
+        -{final} from : Position
+        -{final} to: Position
+        -{final} mover: Piece
+        -{final} kind : MoveKind
+        -{final} captured : Piece | None
+        -{final} promotedTo : PieceType | None
+
+        +getFrom(): Position
+        +getTo() : Position
+        +getMover() : Piece
+        +getKind(): MoveKind
+
+        +Move(from: Position, to: Position, mover: Piece, kind: MoveKind, captured: Piece?, promotedTo: PieceType?)
+    }
+
+note right of Move::getKind #lightyellow
+    Derive whether a special move happened at runtime i.e. capture, promotion, etc.
+end note
+
+    class GameSnapshot {
+        -{final} boardState : BoardSnapshot
+        -{final} turn : Color
+        -{final} gameState : GameState
+        -{final} moveNumber : int
+
+
+        +getBoard() : BoardSnapshot
+        +getTurn(): Color
+        +getState(): GameState
+        +getMoveNumber() : int
+
+        +GameSnapshot(boardState: BoardSnapshot, turn: Color, gameState: GameState, moveNumber: int)
+    }
+
+    enum PieceType {
+        PAWN
+        ROOK
+        KNIGHT
+        BISHOP
+        QUEEN
+        KING
+    }
+
+    enum Adjacencies {
+        UPLEFT
+        UP
+        UPRIGHT
+        LEFT
+        RIGHT 
+        DOWNLEFT 
+        DOWN 
+        DOWNRIGHT
+    }
+
+    class MoveGeometry {
+        -{final} possibleMovements: List<List<Adjacencies>>
+        -{final} limitToOne : boolean
+
+        +getGeometries(): List<List<Adjacencies>>
+        +getLimit() : boolean
+
+        +MoveGeometry(possibleMovements: List<List<Adjacencies>>, limitToOne: boolean)
+    }
+
+note left of MoveGeometry
+    Describes the way a piece moves. LimitToOne indicates whether the piece is allowed to move more than one square at a time. 
+    The possible movements indicates the types of moves made to end up at final dest. E.g. a knight's might look like:
+    [[U,U,R], [U,U,L], [D,D,L], [D,D,R]] with a limitToOne = True.
+
+    In some universe MoveGeometry could be an enum, since there's a set number of types of moves, but I don't know how to
+    implement that in plantuml
+end note
+
+
+    abstract class Piece {
+        -{final} type : PieceType
+        -{final} color : Color
+        -{final} moveGeometry : MoveGeometry
+
+
+        ' will be piece accurate -- only 'pseudo' cause king safety validation would happen in rules engine
+        +getPseudoLegalMoves(board: BoardSnapshot, from: Position): List<Move>
+
+        +Piece(type: PieceType, color: Color, moveGeometry: MoveGeometry)
+    }
+
+note left of Piece::type
+    A new Piece object will have to be created upon promotion
+    to ensure type and moveGeometry are never decoupled.
+end note
+
+
+
+
+
+    enum Color {
+        DARK
+        LIGHT
+    }
+
+    enum GameState {
+        ' could add a 'before_start' state, but no real reason because the start setup is equivalent to an in-progress unless she wants other menu options
+        IN_PROGRESS
+        CHECK
+        CHECKMATE
+        STALEMATE
+        DRAW
+        
+    }
+
+    interface GameView {
+        ' not a "view" view, but a representation -- i.e. would be called GameState, but that name actually fits the enum better
+        ' basically a read-only rep of hte board with important data
+        ' -board: BoardSnapshot
+        ' -turn : Color
+        ' -state: GameState
+
+
+        +getBoard(): BoardSnapshot
+        +turn(): Color
+        +state(): GameState
+        +getLegalMoves(color : Color): List<Move>
+    }
+
+    class GameViewImpl {
+        -board : BoardSnapshot
+        -turn : Color
+        -state : GameState
+        -legalMovesCache : Map<Color, List<Move>>?
+
+        +getBoard(): BoardSnapshot
+        +turn(): Color
+        +state(): GameState
+        +getLegalMoves(color : Color): List<Move>
+    }
+
+
+    class RulesEngine {
+        
+
+
+        +getLegalMoves(board: BoardSnapshot, side: Color): List<Move>
+        ~isLegal(board: BoardSnapshot, move: Move): boolean
+
+        +deriveState(board: BoardSnapshot, sideToMove: Color): GameState
+
+        +RulesEngine()
+    }
+
+    ' PLAYERS ---------------------------------------------------
+
+    interface Player {
+        ' players are just behaviors
+
+        +chooseMove(view: GameView): Move
+        +getColor(): Color
+    }
+
+    class HumanPlayer {
+        -{final} color : Color
+
+        +chooseMove(view: GameView): Move
+        +getColor(): Color
+        
+        +HumanPlayer(color: Color)
+    }
+
+
+    class BotPlayer {
+        -algorithm : BotAlgorithm
+        -{final} color : Color
+        -{final} rng : Random
+
+        +chooseMove(view: GameView): Move
+        +getColor(): Color
+        +setAlgorithm(alg: BotAlgorithm) : void
+        
+        +BotPlayer(algorithm: BotAlgorithm, color: Color)
+    }
+
+    interface BotAlgorithm {
+
+
+        +calculate(view: GameView, color: Color): Move
+
+    }
+
+    HumanPlayer ..|> Player
+    BotPlayer ..|> Player
+
+
+    '-------------------------------------------------------------
+
+    ' OBSERVERS --------------------------------------------------
+
+    interface MoveListener {
+
+        ' EITHER MAKE A GAME SNAPSHOT CLASS OR GET REAL
+        +onMove(move: Move, mover: Player, snapshot: GameSnapshot): void
+
+    }
+
+
+    '-------------------------------------------------------------
+
+
+    ' STATS ------------------------------------------------------
+
+    class GameStatisticsTracker {
+        ' holds onto the stats
+        -stats : List<Statistic>
+        -resultsByColor : Map<Color, Map<String, Object>>
+        -moveLog: List<Move>
+
+        +onMove(move : Move, mover: Player, snapshot: GameSnapshot): void
+        ~resultsFor(color: Color): Map<String, Object>
+        ~resultsAll(): Map<Color, Map<String, Object>>
+
+        +GameStatisticsTracker()
+    }
+
+    interface Statistic {
+
+        +update(move: Move, mover: Player, snapshot: GameSnapshot): void
+        +name(): String
+        +result(): Object
+
+    }
+
+    class MoveHistory {
+        -moves: List<Move>
+
+        +getMoves() : List<Move>
+        +appendMove(m : Move): void
+
+        +MoveHistory()
+    }
+
+    class MoveCountPerPlayer {
+        -counts Map<Color, int>
+
+        +getPlayerMoveCount(p : Player): int
+
+        +MoveCountPerPlayer()
+    }
+
+    class MoveCountPerPieceType {
+
+        -moves : Map<PieceType, int>
+
+        +getPieceTypeMoveCount(pt : PieceType) : int
+
+        +MoveCountPerPieceType()
+    }
+
+    class MoveCountPerPieceTypePerPlayer {
+
+        -moves : Map<Color, Map<PieceType, int>>
+
+        +getPieceTypeMoveCountByPlayer(c : Color, pt : PieceType) : int
+
+    }
+
+    MoveHistory ..|> Statistic
+    MoveCountPerPieceType ..|> Statistic
+    MoveCountPerPlayer ..|> Statistic
+    GameStatisticsTracker ..|> MoveListener
+
+
+    class StatisticsService {
+        ' privacy-gated read api to pull from the tracker
+        -{final} tracker : GameStatisticsTracker
+        -{final} policy : StatisticsAccessPolicy
+        -{final} game : Game
+
+        ' might return empty
+        +forRequester(p: Player): Map<String,Object>
+        +forAll(p: Player): Map<Color, Map<String, Object>>
+
+        +StatisticsService(tracker: GameStatisticsTracker, policy: StatisticsAccessPolicy, game: Game)
+    }
+note right of StatisticsService::forRequester
+    Might return empty
+end note
+
+    interface StatisticsAccessPolicy {
+        ' to decide when and which statistics can be read
+
+        +canView(requester: Player, subject: Color, state: GameState): Mao<Color : Map<String, Object>>
+
+    }
+
+
+    '-------------------------------------------------------------
+
+}
+
+
+package datasource {
+
+    class GameId {
+        'uuid
+        -{final} id : String 
+
+        +getId() : String
+        
+        +GameId(id: String)
+    }
+
+    interface GameRepository {
+        +save(gameId: GameId, snapshot: GameSnapshot): void
+        +load(gameId: GameId): GameSnapshot | None
+
+    }
+
+    interface MoveLogRepository {
+        +append(gameId: GameId, move: Move): void
+        +readAll(gameId: GameId): List<Move>
+    }
+
+    interface StatisticsRepository {
+        +save(gameId: GameId, stats : Map<Color : Map<String: Object>>): void
+        +load(gameId: GameId) : Map<Color : Map<String : Object>> | None
+    }
+
+}
+
+
+    Board --> CastlingRights
+    Board --> Position
+    Board --> Piece
+
+    Move --> Position
+    Move --> Piece
+    Move --> MoveKind
+    Move --> PieceType
+    Move --> MoveGeometry
+
+    MoveGeometry --> Adjacencies
+
+    Piece --> PieceType
+    Piece --> Color
+    Piece --> MoveGeometry
+
+    GameViewImpl ..> GameView
+    GameViewImpl --> BoardSnapshot
+    GameViewImpl --> GameState
+    GameViewImpl --> Color
+    GameViewImpl --> Move
+
+    Game --> Board
+    Game --> Player
+    Game --> RulesEngine
+    Game --> GameStatisticsTracker
+    Game --> MoveListener
+    Game --> GameView
+    Game --> Move
+    Game --> Color
+    Game --> GameState
+
+    GameStatisticsTracker ..> MoveListener
+    GameStatisticsTracker --> Statistic
+    GameStatisticsTracker --> Move
+    GameStatisticsTracker --> Player
+    GameStatisticsTracker --> GameSnapshot
+
+    StatisticsService --> GameStatisticsTracker
+    StatisticsService --> StatisticsAccessPolicy
+    StatisticsService --> Game
+
+    RulesEngine --> BoardSnapshot
+    RulesEngine --> Move
+    RulesEngine --> GameState
+    RulesEngine --> Color
+
+    BotPlayer ..> Player
+    BotPlayer --> BotAlgorithm
+    BotPlayer --> Color
+    BotPlayer --> GameView
+    BotPlayer --> Move
+
+    HumanPlayer ..> Player
+    HumanPlayer --> Color
+    HumanPlayer --> GameView
+    HumanPlayer --> Move
+
+    GameSnapshot --> BoardSnapshot
+    GameSnapshot --> Color
+    GameSnapshot --> GameState
+
+    BoardSnapshot --> Piece
+    BoardSnapshot --> CastlingRights
+
+    MoveHistory --> Move
+    MoveCountPerPlayer --> Color
+    MoveCountPerPieceType --> PieceType
+
+    MoveHistory ..> Statistic
+    MoveCountPerPlayer ..> Statistic
+    MoveCountPerPieceType ..> Statistic
+    
+
+    datasource.GameRepository --> domain.GameSnapshot
+    datasource.MoveLogRepository --> domain.Move
+    datasource.StatisticsRepository --> domain.Color
+
+@enduml
